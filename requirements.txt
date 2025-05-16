@@ -1,0 +1,14 @@
+streamlit
+pytesseract
+pdf2image
+Pillow
+pandas
+numpy
+tensorflow
+scikit-learn
+matplotlib
+plotly
+kneed
+nltk
+xlsxwriter
+requests
