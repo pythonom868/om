@@ -71,7 +71,7 @@ pad_sequences = tf.keras.preprocessing.sequence.pad_sequences
 def get_tesseract_path():
     """Handle Tesseract path based on platform"""
     if os.name == 'nt':  # Windows
-        return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        return r'tesseract.exe'
     else:  # Unix/Linux/MacOS
         return pytesseract.pytesseract.tesseract_cmd
 
