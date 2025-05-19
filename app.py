@@ -70,17 +70,20 @@ pad_sequences = tf.keras.preprocessing.sequence.pad_sequences
 
 def get_tesseract_path():
     """Handle Tesseract path based on platform"""
-    if os.name == 'nt':  # Windows
-        return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-    else:  # Unix/Linux/MacOS
-        return pytesseract.pytesseract.tesseract_cmd
-
-# Try to set Tesseract path
-try:
-    pytesseract.pytesseract.tesseract_cmd = get_tesseract_path()
-except Exception as e:
-    # Will be handled during runtime
-    pass
+    try:
+        # Check if tesseract is in PATH
+        import shutil
+        tesseract_path = shutil.which('tesseract')
+        if tesseract_path:
+            return tesseract_path
+        
+        # Try default locations
+        if os.name == 'nt':  # Windows
+            return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        else:  # Unix/Linux/MacOS
+            return '/usr/bin/tesseract'
+    except Exception:
+        return 'tesseract'  # Try with just the command name
 
 # ----------- Error Handling -----------
 
