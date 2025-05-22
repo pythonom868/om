@@ -11,4 +11,6 @@ plotly
 kneed
 nltk
 difflib
-poppler-utils
+openpyxl
+xlsxwriter
+requests
