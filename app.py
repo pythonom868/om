@@ -79,7 +79,7 @@ def get_tesseract_path():
         
         # Try default locations
         if os.name == 'nt':  # Windows
-            return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+            return r'tesseract.exe'
         else:  # Unix/Linux/MacOS
             return '/usr/bin/tesseract'
     except Exception:
