@@ -1,7 +1,7 @@
 streamlit
 pytesseract
 pdf2image
-pillow
+Pillow
 pandas
 numpy
 tensorflow
@@ -9,8 +9,4 @@ scikit-learn
 matplotlib
 plotly
 kneed
-nltk
-difflib
-openpyxl
 xlsxwriter
-requests
