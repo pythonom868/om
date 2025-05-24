@@ -729,20 +729,6 @@ def main():
         "📊 Visualize", 
         "📋 Manage Data"
     ])
-# 📷 Camera Scanner Section
-    st.subheader("📷 Document Scanner")
-    if st.button("Open Camera Scanner"):
-        camera_image = st.camera_input("Capture Image")
-
-        if camera_image is not None:
-            image = Image.open(camera_image)
-            st.image(image, caption="Captured Image", use_column_width=True)
-
-            with st.spinner("Extracting text..."):
-                extracted_text = pytesseract.image_to_string(image)
-                st.success("✅ Text extracted successfully!")
-
-            st.text_area("📝 Extracted Text", extracted_text, height=250) 
 
     # Tab 1: Upload & Extract
     with tabs[0]:
