@@ -613,73 +613,71 @@ def visualize_clusters(df):
     return df
 
 def save_extracted_text(text, filename, format_type):
-    """Save extracted text in various formats (TXT, CSV, Excel)"""
+    """Save extracted text in various formats and return download data"""
     base_filename = os.path.splitext(os.path.basename(filename))[0]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     if format_type == "txt":
-        # Save as TXT file
-        output_path = f"{base_filename}_{timestamp}.txt"
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        return output_path
+        # Create TXT content
+        output_filename = f"{base_filename}_{timestamp}.txt"
+        return text.encode('utf-8'), output_filename, "text/plain"
     
     elif format_type == "csv":
-        # Save as CSV file with each line as a separate row
-        output_path = f"{base_filename}_{timestamp}.csv"
-        with open(output_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            # Add header row
-            writer.writerow(["Line Number", "Text Content"])
-            # Split text by lines and write each line as a row
-            for i, line in enumerate(text.split('\n')):
-                if line.strip():  # Skip empty lines
-                    writer.writerow([i+1, line])
-        return output_path
+        # Create CSV content
+        output_filename = f"{base_filename}_{timestamp}.csv"
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Line Number", "Text Content"])
+        for i, line in enumerate(text.split('\n')):
+            if line.strip():
+                writer.writerow([i+1, line])
+        return output.getvalue().encode('utf-8'), output_filename, "text/csv"
     
     elif format_type == "excel":
-        # Save as Excel file with each line as a separate row
-        output_path = f"{base_filename}_{timestamp}.xlsx"
-        workbook = xlsxwriter.Workbook(output_path)
+        # Create Excel content in memory
+        output_filename = f"{base_filename}_{timestamp}.xlsx"
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         worksheet = workbook.add_worksheet("Extracted Text")
         
-        # Add headers with some formatting
         bold_format = workbook.add_format({'bold': True, 'bg_color': '#D9D9D9'})
         worksheet.write(0, 0, "Line Number", bold_format)
         worksheet.write(0, 1, "Text Content", bold_format)
         
-        # Split text by lines and write each line as a row
         row = 1
         for i, line in enumerate(text.split('\n')):
-            if line.strip():  # Skip empty lines
+            if line.strip():
                 worksheet.write(row, 0, i+1)
                 worksheet.write(row, 1, line)
                 row += 1
         
-        # Adjust column widths
         worksheet.set_column(0, 0, 15)
         worksheet.set_column(1, 1, 100)
         
         workbook.close()
-        return output_path
+        output.seek(0)
+        return output.read(), output_filename, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     
-    return None
+    return None, None, None
 
 def batch_save_documents(file_names, individual_texts, batch_format, save_option):
-    """Process batch saving of documents in various formats"""
-    saved_files = []
+    """Process batch saving of documents and return download data"""
     
     if save_option == "Individual files":
-        # Save each document as separate file
-        for filename in file_names:
-            text = individual_texts.get(filename, "")
-            if text.strip():
-                saved_path = save_extracted_text(text, filename, batch_format)
-                if saved_path:
-                    saved_files.append(saved_path)
+        # Create a ZIP file containing all individual files
+        zip_buffer = io.BytesIO()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        if saved_files:
-            st.success(f"✅ Saved {len(saved_files)} files successfully!")
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for filename in file_names:
+                text = individual_texts.get(filename, "")
+                if text.strip():
+                    file_data, file_name, _ = save_extracted_text(text, filename, batch_format)
+                    if file_data:
+                        zip_file.writestr(file_name, file_data)
+        
+        zip_buffer.seek(0)
+        return zip_buffer.read(), f"batch_documents_{timestamp}.zip", "application/zip"
     else:
         # Save all documents as one combined file
         combined_text = ""
@@ -689,13 +687,9 @@ def batch_save_documents(file_names, individual_texts, batch_format, save_option
                 combined_text += f"\n\n--- {filename} ---\n{text}\n"
         
         if combined_text.strip():
-            saved_path = save_extracted_text(combined_text, "combined_documents", batch_format)
-            if saved_path:
-                st.success(f"✅ Combined file saved as {saved_path}")
+            return save_extracted_text(combined_text, "combined_documents", batch_format)
         else:
-            st.error("⚠️ No text available to save")
-    
-    return saved_files
+            return None, None, None
 
 # ----------- Streamlit App -----------
 
@@ -717,383 +711,367 @@ def main():
         st.session_state['individual_texts'] = {}
     if 'dataset' not in st.session_state:
         st.session_state['dataset'] = []
-    if 'classification_counts' not in st.session_state:
-        st.session_state['classification_counts'] = {}
-    if 'processed_data' not in st.session_state:
-        st.session_state['processed_data'] = None
-
-    # Create tabs for different functions
-    tabs = st.tabs([
-        "📤 Upload & Extract", 
-        "🏷️ Train & Classify", 
-        "📊 Visualize", 
-        "📋 Manage Data"
+# Load saved models on startup
+    if st.session_state['nb_model'] is None:
+        nb_model, rnn_model, tokenizer, label_map, unique_labels = load_saved_models()
+        if nb_model is not None:
+            st.session_state['nb_model'] = nb_model
+            st.session_state['rnn_model'] = rnn_model
+            st.session_state['tokenizer'] = tokenizer
+            st.session_state['label_map'] = label_map
+            st.session_state['unique_labels'] = unique_labels
+    
+    # Sidebar for model status
+    st.sidebar.header("🤖 Model Status")
+    if st.session_state['nb_model'] is not None:
+        st.sidebar.success("✅ Models loaded and ready")
+        metadata = load_model(METADATA_PATH)
+        if metadata:
+            st.sidebar.info(f"Last updated: {metadata.get('last_updated', 'Unknown')}")
+            st.sidebar.info(f"Training samples: {metadata.get('num_samples', 'Unknown')}")
+    else:
+        st.sidebar.warning("⚠️ No trained models found")
+    
+    # Main app tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📤 Upload & Process", 
+        "🎯 Classification", 
+        "📊 Clustering Analysis",
+        "💾 Export Results",
+        "🔧 Model Management"
     ])
-
-    # Tab 1: Upload & Extract
-    with tabs[0]:
-        st.header("📤 Upload Documents & Extract Text")
+    
+    # Tab 1: Upload and Process Documents
+    with tab1:
+        st.header("📤 Upload Documents")
         
-        upload_col1, upload_col2 = st.columns(2)
+        # Upload method selection
+        upload_method = st.radio(
+            "Choose upload method:",
+            ["Individual Files", "ZIP Archive", "Folder Path"]
+        )
         
-        with upload_col1:
-            st.subheader("1️⃣ Choose Upload Method")
-            upload_method = st.radio(
-                "Select how to upload files:",
-                options=["Upload individual files", "Upload ZIP file", "Use local folder"],
-                index=0
+        file_list = []
+        
+        if upload_method == "Individual Files":
+            uploaded_files = st.file_uploader(
+                "Choose files",
+                type=['png', 'jpg', 'jpeg', 'pdf'],
+                accept_multiple_files=True
             )
+            if uploaded_files:
+                file_list = get_files_from_upload(uploaded_files)
+        
+        elif upload_method == "ZIP Archive":
+            uploaded_zip = st.file_uploader(
+                "Choose ZIP file",
+                type=['zip']
+            )
+            if uploaded_zip:
+                file_list = get_files_from_zip(uploaded_zip)
+        
+        elif upload_method == "Folder Path":
+            folder_path = st.text_input("Enter folder path:")
+            if folder_path and os.path.exists(folder_path):
+                file_list = get_files_from_folder(folder_path)
+            elif folder_path:
+                st.error("Folder path does not exist")
+        
+        if file_list:
+            st.success(f"Found {len(file_list)} files to process")
             
-            file_list = []
-            
-            if upload_method == "Upload individual files":
-                uploaded_files = st.file_uploader(
-                    "Upload images or PDFs", 
-                    type=["jpg", "jpeg", "png", "pdf"], 
-                    accept_multiple_files=True
-                )
-                if uploaded_files:
-                    file_list = get_files_from_upload(uploaded_files)
+            if st.button("🔄 Process Files", type="primary"):
+                with st.spinner("Processing files..."):
+                    dataset, all_text, classification_counts, individual_texts = process_files(file_list)
+                
+                if dataset:
+                    st.session_state['current_dataset'] = pd.DataFrame(dataset)
+                    st.session_state['individual_texts'] = individual_texts
+                    st.success(f"✅ Successfully processed {len(dataset)} files")
                     
-            elif upload_method == "Upload ZIP file":
-                uploaded_zip = st.file_uploader("Upload ZIP file containing images/PDFs", type=["zip"])
-                if uploaded_zip:
-                    file_list = get_files_from_zip(uploaded_zip)
+                    # Display processing summary
+                    st.subheader("📋 Processing Summary")
+                    col1, col2 = st.columns(2)
                     
-            elif upload_method == "Use local folder":
-                folder_path = st.text_input("Enter path to folder containing images/PDFs")
-                if folder_path and os.path.isdir(folder_path):
-                    file_list = get_files_from_folder(folder_path)
-                    if not file_list:
-                        st.warning("⚠️ No supported files found in this folder")
+                    with col1:
+                        st.write("**File Types Processed:**")
+                        for label, count in classification_counts.items():
+                            st.write(f"- {label}: {count} files")
+                    
+                    with col2:
+                        st.write("**Preview of extracted text:**")
+                        st.text_area("Combined Text Preview", all_text[:1000] + "...", height=200)
+    
+    # Tab 2: Classification
+    with tab2:
+        st.header("🎯 Document Classification")
         
-        with upload_col2:
-            st.subheader("2️⃣ Process Files")
+        if 'current_dataset' in st.session_state:
+            df = st.session_state['current_dataset']
             
-            if file_list:
-                st.write(f"📄 Found {len(file_list)} file(s)")
-                
-                if st.button("🚀 Process Files", key="process_button"):
-                    with st.spinner("Processing files..."):
-                        dataset, all_text, classification_counts, individual_texts = process_files(file_list)
-                        
-                        # Save to session state
-                        st.session_state['dataset'] = dataset
-                        st.session_state['classification_counts'] = classification_counts
-                        st.session_state['individual_texts'] = individual_texts
-                        
-                        # Create DataFrame
-                        processed_df = pd.DataFrame(dataset)
-                        st.session_state['processed_data'] = processed_df
-                        
-                        # Display message
-                        st.success(f"✅ Successfully processed {len(dataset)} files!")
-            else:
-                st.info("👆 Upload files to begin")
-        
-        # Show results if data is available
-        if st.session_state['processed_data'] is not None:
-            st.subheader("3️⃣ Extracted Data")
+            col1, col2 = st.columns(2)
             
-            # Display a summary and class distribution
-            st.write("**Document Class Distribution:**")
-            class_counts = st.session_state['classification_counts']
-            
-            # Create a horizontal bar chart
-            if class_counts:
-                fig = px.bar(
-                    x=list(class_counts.values()), 
-                    y=list(class_counts.keys()),
-                    orientation='h',
-                    labels={'x': 'Number of Documents', 'y': 'Document Class'},
-                    title='Document Distribution by Class'
-                )
-                fig.update_layout(yaxis={'categoryorder':'total ascending'})
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # Allow viewing individual documents
-            st.write("**Preview Extracted Text:**")
-            file_names = list(st.session_state['individual_texts'].keys())
-            if file_names:
-                selected_file = st.selectbox("Select a file to view:", file_names)
-                
-                # Show the extracted text
-                text = st.session_state['individual_texts'].get(selected_file, "")
-                if text.strip():
-                    st.text_area("Extracted Text:", value=text, height=300)
-                else:
-                    st.warning("⚠️ No text extracted from this file")
-                
-                # Save options
-                st.write("**Save Options:**")
-                save_cols = st.columns(3)
-                with save_cols[0]:
-                    save_format = st.selectbox(
-                        "Save format:", 
-                        options=["txt", "csv", "excel"],
-                        index=0
-                    )
-                with save_cols[1]:
-                    if st.button("💾 Save This Document"):
-                        saved_path = save_extracted_text(text, selected_file, save_format)
-                        if saved_path:
-                            st.success(f"✅ Saved to {saved_path}")
-                
-                # Batch save option
-                st.write("**Batch Save Options:**")
-                batch_cols = st.columns([2, 1, 1])
-                with batch_cols[0]:
-                    batch_format = st.selectbox(
-                        "Batch save format:", 
-                        options=["txt", "csv", "excel"],
-                        index=0,
-                        key="batch_format"
-                    )
-                with batch_cols[1]:
-                    save_option = st.radio(
-                        "Save as:",
-                        options=["Individual files", "One combined file"],
-                        key="batch_save_option"
-                    )
-                with batch_cols[2]:
-                    if st.button("💾 Batch Save All"):
-                        batch_save_documents(
-                            file_names, 
-                            st.session_state['individual_texts'], 
-                            batch_format, 
-                            save_option
-                        )
-
-    # Tab 2: Train & Classify
-    with tabs[1]:
-        st.header("🏷️ Train & Classify Documents")
-        
-        if st.session_state['processed_data'] is None:
-            st.info("👈 First process files in the Upload & Extract tab")
-        else:
-            train_col1, train_col2 = st.columns(2)
-            
-            with train_col1:
-                st.subheader("1️⃣ Training Data")
-                
-                # Display the data to be used for training
-                st.write(f"**Available Data:** {len(st.session_state['processed_data'])} documents")
-                st.dataframe(
-                    st.session_state['processed_data'][['filename', 'label']]
-                )
-                
-                # Training options
-                st.subheader("2️⃣ Train Models")
-                
-                if st.button("🧠 Train Models"):
-                    with st.spinner("Training models..."):
-                        # Train both models
-                        nb_model, rnn_model, tokenizer, label_map, unique_labels = train_models(
-                            st.session_state['processed_data']
-                        )
-                        
-                        # Save to session state
+            with col1:
+                st.subheader("🏋️ Train New Model")
+                if st.button("Train Models with Current Data", type="primary"):
+                    nb_model, rnn_model, tokenizer, label_map, unique_labels = train_models(df)
+                    
+                    if nb_model is not None:
                         st.session_state['nb_model'] = nb_model
                         st.session_state['rnn_model'] = rnn_model
                         st.session_state['tokenizer'] = tokenizer
                         st.session_state['label_map'] = label_map
                         st.session_state['unique_labels'] = unique_labels
                         
-                        # Save training data for future use
-                        save_training_data(st.session_state['processed_data'])
+                        # Save training data
+                        save_training_data(df)
+                        st.success("✅ Models trained and saved successfully!")
+                        st.rerun()
+            
+            with col2:
+                st.subheader("🔄 Update Existing Model")
+                if st.session_state['nb_model'] is not None:
+                    if st.button("Update Model with New Data"):
+                        nb_model, rnn_model, tokenizer, label_map, unique_labels = update_model_with_new_data(df)
                         
-                        st.success("✅ Models trained successfully!")
-                
-                # Option to load saved models
-                if st.button("📂 Load Saved Models"):
-                    with st.spinner("Loading saved models..."):
-                        nb_model, rnn_model, tokenizer, label_map, unique_labels = load_saved_models()
-                        
-                        if nb_model and rnn_model:
-                            # Save to session state
+                        if nb_model is not None:
                             st.session_state['nb_model'] = nb_model
                             st.session_state['rnn_model'] = rnn_model
                             st.session_state['tokenizer'] = tokenizer
                             st.session_state['label_map'] = label_map
                             st.session_state['unique_labels'] = unique_labels
-                            
-                            st.success(f"✅ Models loaded successfully! Available classes: {', '.join(unique_labels)}")
-                        else:
-                            st.error("❌ No saved models found")
+                            st.success("✅ Model updated successfully!")
+                            st.rerun()
+                else:
+                    st.info("No existing model to update")
             
-            with train_col2:
-                st.subheader("3️⃣ Classification")
+            # Make predictions if model exists
+            if st.session_state['nb_model'] is not None:
+                st.subheader("🔮 Predictions")
                 
-                # Check if models are available
-                models_available = (
-                    st.session_state['nb_model'] is not None and 
-                    st.session_state['rnn_model'] is not None
+                predicted_df = predict_with_models(
+                    df.copy(),
+                    st.session_state['nb_model'],
+                    st.session_state['rnn_model'],
+                    st.session_state['tokenizer'],
+                    st.session_state['label_map'],
+                    st.session_state['unique_labels']
                 )
                 
-                if not models_available:
-                    st.info("👈 First train or load models")
-                else:
-                    # Option to use current data or new data
-                    classification_data_option = st.radio(
-                        "Select data to classify:",
-                        options=["Use current processed data", "Upload new files to classify"],
-                        index=0
+                st.session_state['predicted_dataset'] = predicted_df
+                
+                # Display predictions
+                st.dataframe(
+                    predicted_df[['filename', 'label', 'Prediction']],
+                    use_container_width=True
+                )
+                
+                # Prediction accuracy analysis
+                if 'label' in predicted_df.columns:
+                    st.subheader("📊 Prediction Analysis")
+                    
+                    # Calculate accuracy for each model
+                    nb_accuracy = (predicted_df['label'] == predicted_df['NaiveBayes_Label']).mean()
+                    rnn_accuracy = (predicted_df['label'] == predicted_df['RNN_Label']).mean()
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Naive Bayes Accuracy", f"{nb_accuracy:.2%}")
+                    with col2:
+                        st.metric("RNN Accuracy", f"{rnn_accuracy:.2%}")
+            
+            else:
+                st.warning("⚠️ No trained model available. Please train a model first.")
+        
+        else:
+            st.info("📤 Please upload and process documents first in the 'Upload & Process' tab.")
+    
+    # Tab 3: Clustering Analysis
+    with tab3:
+        st.header("📊 Document Clustering Analysis")
+        
+        if 'current_dataset' in st.session_state:
+            df = st.session_state['current_dataset']
+            
+            if len(df) >= 3:
+                st.write("Analyze document patterns and group similar documents together.")
+                
+                if st.button("🔍 Perform Clustering Analysis", type="primary"):
+                    clustered_df = visualize_clusters(df)
+                    if clustered_df is not None:
+                        st.session_state['clustered_dataset'] = clustered_df
+            else:
+                st.warning("⚠️ Need at least 3 documents for clustering analysis.")
+        else:
+            st.info("📤 Please upload and process documents first in the 'Upload & Process' tab.")
+    
+    # Tab 4: Export Results
+    with tab4:
+        st.header("💾 Export Results")
+        
+        if 'current_dataset' in st.session_state:
+            
+            # Export options
+            st.subheader("📋 Export Processed Data")
+            
+            export_format = st.selectbox(
+                "Choose export format:",
+                ["CSV", "Excel", "JSON"]
+            )
+            
+            # Choose dataset to export
+            dataset_choice = st.radio(
+                "Choose dataset to export:",
+                ["Original Dataset", "Predictions", "Clustered Data"]
+            )
+            
+            export_df = None
+            if dataset_choice == "Original Dataset":
+                export_df = st.session_state['current_dataset']
+            elif dataset_choice == "Predictions" and 'predicted_dataset' in st.session_state:
+                export_df = st.session_state['predicted_dataset']
+            elif dataset_choice == "Clustered Data" and 'clustered_dataset' in st.session_state:
+                export_df = st.session_state['clustered_dataset']
+            
+            if export_df is not None:
+                if st.button("📥 Generate Export File"):
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    
+                    if export_format == "CSV":
+                        csv_data = export_df.to_csv(index=False)
+                        st.download_button(
+                            label="Download CSV",
+                            data=csv_data,
+                            file_name=f"document_analysis_{timestamp}.csv",
+                            mime="text/csv"
+                        )
+                    
+                    elif export_format == "Excel":
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                            export_df.to_excel(writer, sheet_name='Document Analysis', index=False)
+                        
+                        st.download_button(
+                            label="Download Excel",
+                            data=output.getvalue(),
+                            file_name=f"document_analysis_{timestamp}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    
+                    elif export_format == "JSON":
+                        json_data = export_df.to_json(orient='records', indent=2)
+                        st.download_button(
+                            label="Download JSON",
+                            data=json_data,
+                            file_name=f"document_analysis_{timestamp}.json",
+                            mime="application/json"
+                        )
+            
+            # Export individual extracted texts
+            st.subheader("📄 Export Individual Document Texts")
+            
+            if 'individual_texts' in st.session_state:
+                individual_texts = st.session_state['individual_texts']
+                
+                text_format = st.selectbox(
+                    "Choose text format:",
+                    ["TXT", "CSV", "Excel"],
+                    key="text_format"
+                )
+                
+                save_option = st.radio(
+                    "Save option:",
+                    ["Individual files (ZIP)", "Combined file"]
+                )
+                
+                if st.button("📥 Export Text Files"):
+                    format_map = {"TXT": "txt", "CSV": "csv", "Excel": "excel"}
+                    
+                    file_data, filename, mime_type = batch_save_documents(
+                        list(individual_texts.keys()),
+                        individual_texts,
+                        format_map[text_format],
+                        "Individual files" if save_option == "Individual files (ZIP)" else "Combined"
                     )
                     
-                    classification_df = None
-                    
-                    if classification_data_option == "Use current processed data":
-                        classification_df = st.session_state['processed_data'].copy()
-                    else:
-                        # Allow uploading new files
-                        classify_files = st.file_uploader(
-                            "Upload files to classify", 
-                            type=["jpg", "jpeg", "png", "pdf"], 
-                            accept_multiple_files=True,
-                            key="classify_upload"
+                    if file_data:
+                        st.download_button(
+                            label=f"Download {filename}",
+                            data=file_data,
+                            file_name=filename,
+                            mime=mime_type
                         )
-                        
-                        if classify_files:
-                            with st.spinner("Processing new files..."):
-                                file_list = get_files_from_upload(classify_files)
-                                dataset, _, _, _ = process_files(file_list)
-                                classification_df = pd.DataFrame(dataset)
-                    
-                    # Run classification if data is available
-                    if classification_df is not None and not classification_df.empty:
-                        if st.button("🔍 Run Classification"):
-                            with st.spinner("Classifying documents..."):
-                                # Make predictions
-                                result_df = predict_with_models(
-                                    classification_df,
-                                    st.session_state['nb_model'],
-                                    st.session_state['rnn_model'],
-                                    st.session_state['tokenizer'],
-                                    st.session_state['label_map'],
-                                    st.session_state['unique_labels']
-                                )
-                                
-                                # Show results
-                                st.subheader("📋 Classification Results")
-                                st.dataframe(
-                                    result_df[['filename', 'label', 'NaiveBayes_Label', 'RNN_Label', 'RNN_Confidence']]
-                                )
-                                
-                                # Calculate accuracy if original labels are available
-                                if 'label' in result_df.columns:
-                                    nb_accuracy = (result_df['label'] == result_df['NaiveBayes_Label']).mean()
-                                    rnn_accuracy = (result_df['label'] == result_df['RNN_Label']).mean()
-                                    
-                                    st.write("**Model Performance:**")
-                                    col1, col2 = st.columns(2)
-                                    col1.metric("Naive Bayes Accuracy", f"{nb_accuracy:.2%}")
-                                    col2.metric("RNN Accuracy", f"{rnn_accuracy:.2%}")
-                                
-                                # Option to save results
-                                if st.button("💾 Save Classification Results"):
-                                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                    results_path = f"classification_results_{timestamp}.csv"
-                                    result_df.to_csv(results_path, index=False)
-                                    st.success(f"✅ Results saved to {results_path}")
-
-    # Tab 3: Visualize
-    with tabs[2]:
-        st.header("📊 Document Analysis & Visualization")
-        
-        if st.session_state['processed_data'] is None:
-            st.info("👈 First process files in the Upload & Extract tab")
         else:
-            st.subheader("Cluster Analysis")
+            st.info("📤 Please upload and process documents first.")
+    
+    # Tab 5: Model Management
+    with tab5:
+        st.header("🔧 Model Management")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📊 Current Model Info")
             
-            # Run clustering and visualization
-            if st.button("🔍 Analyze Document Clusters"):
-                with st.spinner("Analyzing document clusters..."):
-                    visualize_clusters(st.session_state['processed_data'])
+            if st.session_state['nb_model'] is not None:
+                metadata = load_model(METADATA_PATH)
+                if metadata:
+                    st.info(f"**Last Updated:** {metadata.get('last_updated', 'Unknown')}")
+                    st.info(f"**Training Samples:** {metadata.get('num_samples', 'Unknown')}")
+                    st.info(f"**Unique Labels:** {len(metadata.get('unique_labels', []))}")
+                    
+                    # Show training data
+                    training_df = load_training_data()
+                    if not training_df.empty:
+                        st.subheader("📋 Training Data Preview")
+                        st.dataframe(training_df.head(10))
+                        
+                        st.subheader("📈 Label Distribution")
+                        label_counts = training_df['label'].value_counts()
+                        fig = px.bar(
+                            x=label_counts.index,
+                            y=label_counts.values,
+                            labels={'x': 'Document Type', 'y': 'Count'}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No model currently loaded")
+        
+        with col2:
+            st.subheader("🗑️ Model Actions")
+            
+            if st.button("🔄 Reload Models from Disk", type="secondary"):
+                nb_model, rnn_model, tokenizer, label_map, unique_labels = load_saved_models()
+                if nb_model is not None:
+                    st.session_state['nb_model'] = nb_model
+                    st.session_state['rnn_model'] = rnn_model
+                    st.session_state['tokenizer'] = tokenizer
+                    st.session_state['label_map'] = label_map
+                    st.session_state['unique_labels'] = unique_labels
+                    st.success("✅ Models reloaded successfully!")
+                    st.rerun()
+                else:
+                    st.error("❌ No saved models found")
+            
+            if st.button("🗑️ Clear Current Session", type="secondary"):
+                for key in ['nb_model', 'rnn_model', 'tokenizer', 'label_map', 'unique_labels', 
+                           'current_dataset', 'predicted_dataset', 'clustered_dataset', 'individual_texts']:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.success("✅ Session cleared!")
+                st.rerun()
+            
+            if st.button("🧹 Delete All Saved Models", type="secondary"):
+                if st.checkbox("I understand this will delete all saved models"):
+                    try:
+                        for filepath in [NB_MODEL_PATH, RNN_MODEL_PATH, METADATA_PATH, 
+                                       TRAINING_DATA_PATH, KMEANS_MODEL_PATH, VECTORIZER_PATH]:
+                            if os.path.exists(filepath):
+                                os.remove(filepath)
+                        st.success("✅ All saved models deleted!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error deleting models: {e}")
 
-    # Tab 4: Manage Data
-    with tabs[3]:
-        st.header("📋 Data Management")
-        
-        data_tabs = st.tabs(["Current Data", "Saved Training Data"])
-        
-        # Current session data
-        with data_tabs[0]:
-            st.subheader("Current Session Data")
-            
-            if st.session_state['processed_data'] is not None:
-                st.write(f"**Documents in current session:** {len(st.session_state['processed_data'])}")
-                st.dataframe(st.session_state['processed_data'])
-                
-                # Export current data
-                if st.button("💾 Export Current Data"):
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    export_path = f"document_data_export_{timestamp}.csv"
-                    st.session_state['processed_data'].to_csv(export_path, index=False)
-                    st.success(f"✅ Data exported to {export_path}")
-                
-                # Clear session data
-                if st.button("🗑️ Clear Current Session Data"):
-                    st.session_state['processed_data'] = None
-                    st.session_state['dataset'] = []
-                    st.session_state['classification_counts'] = {}
-                    st.session_state['individual_texts'] = {}
-                    st.success("✅ Session data cleared")
-                    st.experimental_rerun()
-            else:
-                st.info("No data in current session")
-        
-        # Saved training data
-        with data_tabs[1]:
-            st.subheader("Saved Training Data")
-            
-            training_df = load_training_data()
-            
-            if not training_df.empty:
-                st.write(f"**Saved training documents:** {len(training_df)}")
-                st.dataframe(training_df)
-                
-                # Delete saved training data
-                if st.button("🗑️ Delete All Saved Training Data"):
-                    if os.path.exists(TRAINING_DATA_PATH):
-                        os.remove(TRAINING_DATA_PATH)
-                        st.success("✅ All saved training data deleted")
-                        st.experimental_rerun()
-            else:
-                st.info("No saved training data found")
-            
-            # Model management
-            st.subheader("Model Management")
-            
-            model_files = [
-                os.path.exists(NB_MODEL_PATH),
-                os.path.exists(RNN_MODEL_PATH),
-                os.path.exists(METADATA_PATH)
-            ]
-            
-            if any(model_files):
-                st.write("**Saved models:**")
-                if model_files[0]:
-                    st.write("✅ Naive Bayes model")
-                if model_files[1]:
-                    st.write("✅ RNN model")
-                if model_files[2]:
-                    # Show metadata if available
-                    metadata = load_model(METADATA_PATH)
-                    if metadata:
-                        st.write(f"📈 Model trained on {metadata.get('num_samples', 'unknown')} samples")
-                        st.write(f"🏷️ Available classes: {', '.join(metadata.get('unique_labels', []))}")
-                        st.write(f"⏰ Last updated: {metadata.get('last_updated', 'unknown')}")
-                
-                # Delete saved models
-                if st.button("🗑️ Delete All Saved Models"):
-                    for model_path in [NB_MODEL_PATH, RNN_MODEL_PATH, METADATA_PATH, VECTORIZER_PATH, KMEANS_MODEL_PATH]:
-                        if os.path.exists(model_path):
-                            os.remove(model_path)
-                    st.success("✅ All saved models deleted")
-                    st.experimental_rerun()
-            else:
-                st.info("No saved models found")
-
-# Run the app
 if __name__ == "__main__":
     main()
